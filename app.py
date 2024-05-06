@@ -839,7 +839,6 @@ def prepare_model_args(request_body):
 
     return model_args
 
-
 async def promptflow_request(request):
     try:
         headers = {
@@ -871,7 +870,6 @@ async def promptflow_request(request):
         return resp
     except Exception as e:
         logging.error(f"An error occurred while making promptflow_request: {e}")
-
 
 async def send_chat_request(request):
     filtered_messages = []
