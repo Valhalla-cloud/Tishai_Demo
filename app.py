@@ -33,7 +33,7 @@ from backend.utils import (
 bp = Blueprint("routes", __name__, static_folder="static", template_folder="static")
 
 # Current minimum Azure OpenAI version supported
-MINIMUM_SUPPORTED_AZURE_OPENAI_PREVIEW_API_VERSION = "2023-10-01-preview"
+MINIMUM_SUPPORTED_AZURE_OPENAI_PREVIEW_API_VERSION = "2024-03-01-preview"
 
 load_dotenv()
 
@@ -722,7 +722,34 @@ def get_configured_data_source():
 
     return data_source
 
+def get_vm_info(vmname, resource):
+    # Azure Resource Manager endpoint for virtual machines
+    arm_endpoint = f"https://management.azure.com/subscriptions/3d7c2026-59c6-4d9c-94e5-344c8bd454ab/resourceGroups/rg2724dev/providers/Microsoft.Compute/virtualMachines/{vmname}?api-version=2021-03-01"
 
+    # Azure REST API request headers
+    headers = {
+        "Authorization": "Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        # Send GET request to Azure Resource Manager endpoint
+        response = requests.get(arm_endpoint, headers=headers)
+
+        # Check if request was successful
+        if response.status_code == 200:
+            vm_info = response.json()
+
+            # Extract the specific resource information
+            if resource in vm_info:
+                return vm_info[resource]
+            else:
+                return f"No information found for '{resource}' in VM '{vmname}'"
+        else:
+            return f"Failed to retrieve information for VM '{vmname}'. Status code: {response.status_code}"
+    except Exception as e:
+        return f"An error occurred: {str(e)}"
+    
 def prepare_model_args(request_body):
     request_messages = request_body.get("messages", [])
     messages = []
@@ -735,10 +762,10 @@ def prepare_model_args(request_body):
 
     model_args = {
         "messages": messages,
-         "functions": [  
+         "tools": [  
     {
         "name": "Get_VM_info",
-        "description": "Retrieves information of Azure Resources like Vms",
+        "description": "Retrieves information of Virtual Machines",
         "parameters": {
             "type": "object",
             "properties": {
