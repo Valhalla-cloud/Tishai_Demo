@@ -5,6 +5,7 @@ import logging
 import uuid
 from dotenv import load_dotenv
 import httpx
+import requests
 from quart import (
     Blueprint,
     Quart,
@@ -764,6 +765,8 @@ def prepare_model_args(request_body):
         "messages": messages,
          "tools": [  
     {
+        "type": "function",
+        "function": {
         "name": "Get_VM_info",
         "description": "Retrieves information of Virtual Machines",
         "parameters": {
@@ -778,8 +781,9 @@ def prepare_model_args(request_body):
                     "description": "The name of the resources, like disk,Nic, or overall info"
                 }
             },
-            "required": ["vmname"]
-        }
+            "required": ["vmname"],
+        },
+      }
     }
 ] ,
         "temperature": float(AZURE_OPENAI_TEMPERATURE),
