@@ -880,8 +880,6 @@ async def send_chat_request(request):
             
     request['messages'] = filtered_messages
     model_args = prepare_model_args(request)
-    tools = tools
-    tools_choice = "auto"
 
     try:
         azure_openai_client = init_openai_client()
@@ -896,16 +894,32 @@ async def send_chat_request(request):
 
 
 async def complete_chat_request(request_body):
-    if USE_PROMPTFLOW and PROMPTFLOW_ENDPOINT and PROMPTFLOW_API_KEY:
-        response = await promptflow_request(request_body)
-        history_metadata = request_body.get("history_metadata", {})
-        return format_pf_non_streaming_response(
-            response, history_metadata, PROMPTFLOW_RESPONSE_FIELD_NAME, PROMPTFLOW_CITATIONS_FIELD_NAME
-        )
-    else:
-        response, apim_request_id = await send_chat_request(request_body)
-        history_metadata = request_body.get("history_metadata", {})
-        return format_non_streaming_response(response, history_metadata, apim_request_id)
+    response, apim_request_id = await send_chat_request(request_body)
+    history_metadata = request_body.get("history_metadata", {})
+
+    # Check if there are tool calls in the response
+    if "tool_calls" in response:
+        # Handle tool calls
+        for tool_call in response["tool_calls"]:
+            function_name = tool_call["function"]["name"]
+            function_args = tool_call["function"]["arguments"]
+
+            if function_name == "get_current_weather":
+                # Call the get_current_weather function
+                function_response = get_current_weather(function_args["location"], function_args.get("unit"))
+                
+                # Append the function response to the messages
+                response["messages"].append({
+                    "tool_call_id": tool_call["id"],
+                    "role": "tool",
+                    "name": function_name,
+                    "content": function_response
+                })
+
+        # Remove tool calls from the response
+        response.pop("tool_calls", None)
+
+    return format_non_streaming_response(response, history_metadata, apim_request_id)
 
 
 async def stream_chat_request(request_body):
@@ -929,6 +943,29 @@ async def conversation_internal(request_body):
             return response
         else:
             result = await complete_chat_request(request_body)
+            
+            # Check if there are tool calls in the response
+            if "tool_calls" in result:
+                # Handle tool calls
+                for tool_call in result["tool_calls"]:
+                    function_name = tool_call["function"]["name"]
+                    function_args = tool_call["function"]["arguments"]
+
+                    if function_name == "get_vm_info":
+                        # Call the get_current_weather function
+                        function_response = get_vm_info(function_args["vmname"], function_args.get("resource"))
+                        
+                        # Append the function response to the messages
+                        result["messages"].append({
+                            "tool_call_id": tool_call["id"],
+                            "role": "tool",
+                            "name": function_name,
+                            "content": function_response
+                        })
+
+                # Remove tool calls from the response
+                result.pop("tool_calls", None)
+
             return jsonify(result)
 
     except Exception as ex:
@@ -937,7 +974,6 @@ async def conversation_internal(request_body):
             return jsonify({"error": str(ex)}), ex.status_code
         else:
             return jsonify({"error": str(ex)}), 500
-
 
 @bp.route("/conversation", methods=["POST"])
 async def conversation():
