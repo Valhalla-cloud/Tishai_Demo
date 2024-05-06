@@ -122,7 +122,7 @@ AZURE_OPENAI_MAX_TOKENS = os.environ.get("AZURE_OPENAI_MAX_TOKENS", 1000)
 AZURE_OPENAI_STOP_SEQUENCE = os.environ.get("AZURE_OPENAI_STOP_SEQUENCE")
 AZURE_OPENAI_SYSTEM_MESSAGE = os.environ.get(
     "AZURE_OPENAI_SYSTEM_MESSAGE",
-    "You are an AI assistant that helps people find information.",
+    "Your Name is Tish-Ai (Teams Integrated Server Health Artificial Intelligence) You Can query  Server Information, Real Time Health Monitoring Data also Historical Trends as well You are still in BETA and Learning looking forward to spread my wings",
 )
 AZURE_OPENAI_PREVIEW_API_VERSION = os.environ.get(
     "AZURE_OPENAI_PREVIEW_API_VERSION",
@@ -306,7 +306,6 @@ def should_use_data():
 
 
 SHOULD_USE_DATA = should_use_data()
-
 
 # Initialize Azure OpenAI Client
 def init_openai_client(use_data=SHOULD_USE_DATA):
@@ -743,7 +742,8 @@ def get_vm_info(vmname, resource):
 
             # Extract the specific resource information
             if resource in vm_info:
-                return vm_info[resource]
+                #return vm_info[resource]
+                return "Returning function data"
             else:
                 return f"No information found for '{resource}' in VM '{vmname}'"
         else:
@@ -880,6 +880,8 @@ async def send_chat_request(request):
             
     request['messages'] = filtered_messages
     model_args = prepare_model_args(request)
+    tools = tools
+    tools_choice = "auto"
 
     try:
         azure_openai_client = init_openai_client()
