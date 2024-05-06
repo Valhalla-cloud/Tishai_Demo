@@ -762,30 +762,30 @@ def prepare_model_args(request_body):
             messages.append({"role": message["role"], "content": message["content"]})
 
     model_args = {
-        "messages": messages,
-         "tools": [  
-    {
-        "type": "function",
-        "function": {
-        "name": "Get_VM_info",
-        "description": "Retrieves information of Virtual Machines",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "vmname": {
-                    "type": "string",
-                    "description": "The name of the Virtual Machine that want the information"
-                },
-                "resource": {
-                    "type": "string",
-                    "description": "The name of the resources, like disk,Nic, or overall info"
+    "messages": messages,
+    "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "Get_VM_info",
+                "description": "Retrieves information of Virtual Machines",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "vmname": {
+                            "type": "string",
+                            "description": "The name of the Virtual Machine that want the information"
+                        },
+                        "resource": {
+                            "type": "string",
+                            "description": "The name of the resources, like disk,Nic, or overall info"
+                        }
+                    },
+                    "required": ["vmname"]
                 }
-            },
-            "required": ["vmname"],
-        },
-      }
-    }
-] ,
+            }
+        }
+    ],
         "temperature": float(AZURE_OPENAI_TEMPERATURE),
         "max_tokens": int(AZURE_OPENAI_MAX_TOKENS),
         "top_p": float(AZURE_OPENAI_TOP_P),
