@@ -5,7 +5,6 @@ import logging
 import uuid
 from dotenv import load_dotenv
 import httpx
-import requests
 from quart import (
     Blueprint,
     Quart,
@@ -18,7 +17,7 @@ from quart import (
 
 from openai import AsyncAzureOpenAI
 from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider
-from backend.auth.auth_utils import get_authenticated_user_details
+from backend.auth.auth_utils import get_authenticated_user_details, get_tenantid
 from backend.history.cosmosdbservice import CosmosConversationClient
 
 from backend.utils import (
@@ -34,7 +33,7 @@ from backend.utils import (
 bp = Blueprint("routes", __name__, static_folder="static", template_folder="static")
 
 # Current minimum Azure OpenAI version supported
-MINIMUM_SUPPORTED_AZURE_OPENAI_PREVIEW_API_VERSION = "2024-03-01-preview"
+MINIMUM_SUPPORTED_AZURE_OPENAI_PREVIEW_API_VERSION = "2024-02-15-preview"
 
 load_dotenv()
 
@@ -122,7 +121,7 @@ AZURE_OPENAI_MAX_TOKENS = os.environ.get("AZURE_OPENAI_MAX_TOKENS", 1000)
 AZURE_OPENAI_STOP_SEQUENCE = os.environ.get("AZURE_OPENAI_STOP_SEQUENCE")
 AZURE_OPENAI_SYSTEM_MESSAGE = os.environ.get(
     "AZURE_OPENAI_SYSTEM_MESSAGE",
-    "Your Name is Tish-Ai (Teams Integrated Server Health Artificial Intelligence) You Can query  Server Information, Real Time Health Monitoring Data also Historical Trends as well You are still in BETA and Learning looking forward to spread my wings",
+    "You are an AI assistant that helps people find information.",
 )
 AZURE_OPENAI_PREVIEW_API_VERSION = os.environ.get(
     "AZURE_OPENAI_PREVIEW_API_VERSION",
@@ -268,7 +267,8 @@ frontend_settings = {
     },
     "sanitize_answer": SANITIZE_ANSWER,
 }
-
+# Enable Microsoft Defender for Cloud Integration
+MS_DEFENDER_ENABLED = os.environ.get("MS_DEFENDER_ENABLED", "false").lower() == "true"
 
 def should_use_data():
     global DATASOURCE_TYPE
@@ -306,6 +306,7 @@ def should_use_data():
 
 
 SHOULD_USE_DATA = should_use_data()
+
 
 # Initialize Azure OpenAI Client
 def init_openai_client(use_data=SHOULD_USE_DATA):
@@ -722,36 +723,8 @@ def get_configured_data_source():
 
     return data_source
 
-def get_vm_info(vmname, resource):
-    # Azure Resource Manager endpoint for virtual machines
-    arm_endpoint = f"https://management.azure.com/subscriptions/3d7c2026-59c6-4d9c-94e5-344c8bd454ab/resourceGroups/rg2724dev/providers/Microsoft.Compute/virtualMachines/{vmname}?api-version=2021-03-01"
 
-    # Azure REST API request headers
-    headers = {
-        "Authorization": "Bearer {access_token}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        # Send GET request to Azure Resource Manager endpoint
-        response = requests.get(arm_endpoint, headers=headers)
-
-        # Check if request was successful
-        if response.status_code == 200:
-            vm_info = response.json()
-
-            # Extract the specific resource information
-            if resource in vm_info:
-                #return vm_info[resource]
-                return "Returning function data"
-            else:
-                return f"No information found for '{resource}' in VM '{vmname}'"
-        else:
-            return f"Failed to retrieve information for VM '{vmname}'. Status code: {response.status_code}"
-    except Exception as e:
-        return f"An error occurred: {str(e)}"
-    
-def prepare_model_args(request_body):
+def prepare_model_args(request_body, request_headers):
     request_messages = request_body.get("messages", [])
     messages = []
     if not SHOULD_USE_DATA:
@@ -761,31 +734,22 @@ def prepare_model_args(request_body):
         if message:
             messages.append({"role": message["role"], "content": message["content"]})
 
-    model_args = {
-    "messages": messages,
-    "tools": [
-        {
-            "type": "function",
-            "function": {
-                "name": "Get_VM_info",
-                "description": "Retrieves information of Virtual Machines",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "vmname": {
-                            "type": "string",
-                            "description": "The name of the Virtual Machine that want the information"
-                        },
-                        "resource": {
-                            "type": "string",
-                            "description": "The name of the resources, like disk,Nic, or overall info"
-                        }
-                    },
-                    "required": ["vmname"]
-                }
-            }
+    user_json = None
+    if (MS_DEFENDER_ENABLED):
+        authenticated_user_details = get_authenticated_user_details(request_headers)
+        tenantId = get_tenantid(authenticated_user_details.get("client_principal_b64"))
+        conversation_id = request_body.get("conversation_id", None)        
+        user_args = {
+            "EndUserId": authenticated_user_details.get('user_principal_id'),
+            "EndUserIdType": 'Entra',
+            "EndUserTenantId": tenantId,
+            "ConversationId": conversation_id,
+            "SourceIp": request_headers.get('X-Forwarded-For', request_headers.get('Remote-Addr', '')),
         }
-    ],
+        user_json = json.dumps(user_args)
+
+    model_args = {
+        "messages": messages,
         "temperature": float(AZURE_OPENAI_TEMPERATURE),
         "max_tokens": int(AZURE_OPENAI_MAX_TOKENS),
         "top_p": float(AZURE_OPENAI_TOP_P),
@@ -796,6 +760,7 @@ def prepare_model_args(request_body):
         ),
         "stream": SHOULD_STREAM,
         "model": AZURE_OPENAI_MODEL,
+        "user": user_json,
     }
 
     if SHOULD_USE_DATA:
@@ -839,6 +804,7 @@ def prepare_model_args(request_body):
 
     return model_args
 
+
 async def promptflow_request(request):
     try:
         headers = {
@@ -871,15 +837,16 @@ async def promptflow_request(request):
     except Exception as e:
         logging.error(f"An error occurred while making promptflow_request: {e}")
 
-async def send_chat_request(request):
+
+async def send_chat_request(request_body, request_headers):
     filtered_messages = []
-    messages = request.get("messages", [])
+    messages = request_body.get("messages", [])
     for message in messages:
         if message.get("role") != 'tool':
             filtered_messages.append(message)
             
-    request['messages'] = filtered_messages
-    model_args = prepare_model_args(request)
+    request_body['messages'] = filtered_messages
+    model_args = prepare_model_args(request_body, request_headers)
 
     try:
         azure_openai_client = init_openai_client()
@@ -893,37 +860,21 @@ async def send_chat_request(request):
     return response, apim_request_id
 
 
-async def complete_chat_request(request_body):
-    response, apim_request_id = await send_chat_request(request_body)
-    history_metadata = request_body.get("history_metadata", {})
-
-    # Check if there are tool calls in the response
-    if "tool_calls" in response:
-        # Handle tool calls
-        for tool_call in response["tool_calls"]:
-            function_name = tool_call["function"]["name"]
-            function_args = tool_call["function"]["arguments"]
-
-            if function_name == "get_current_weather":
-                # Call the get_current_weather function
-                function_response = get_current_weather(function_args["location"], function_args.get("unit"))
-                
-                # Append the function response to the messages
-                response["messages"].append({
-                    "tool_call_id": tool_call["id"],
-                    "role": "tool",
-                    "name": function_name,
-                    "content": function_response
-                })
-
-        # Remove tool calls from the response
-        response.pop("tool_calls", None)
-
-    return format_non_streaming_response(response, history_metadata, apim_request_id)
+async def complete_chat_request(request_body, request_headers):
+    if USE_PROMPTFLOW and PROMPTFLOW_ENDPOINT and PROMPTFLOW_API_KEY:
+        response = await promptflow_request(request_body)
+        history_metadata = request_body.get("history_metadata", {})
+        return format_pf_non_streaming_response(
+            response, history_metadata, PROMPTFLOW_RESPONSE_FIELD_NAME, PROMPTFLOW_CITATIONS_FIELD_NAME
+        )
+    else:
+        response, apim_request_id = await send_chat_request(request_body, request_headers)
+        history_metadata = request_body.get("history_metadata", {})
+        return format_non_streaming_response(response, history_metadata, apim_request_id)
 
 
-async def stream_chat_request(request_body):
-    response, apim_request_id = await send_chat_request(request_body)
+async def stream_chat_request(request_body, request_headers):
+    response, apim_request_id = await send_chat_request(request_body, request_headers)
     history_metadata = request_body.get("history_metadata", {})
     
     async def generate():
@@ -933,39 +884,16 @@ async def stream_chat_request(request_body):
     return generate()
 
 
-async def conversation_internal(request_body):
+async def conversation_internal(request_body, request_headers):
     try:
         if SHOULD_STREAM:
-            result = await stream_chat_request(request_body)
+            result = await stream_chat_request(request_body, request_headers)
             response = await make_response(format_as_ndjson(result))
             response.timeout = None
             response.mimetype = "application/json-lines"
             return response
         else:
-            result = await complete_chat_request(request_body)
-            
-            # Check if there are tool calls in the response
-            if "tool_calls" in result:
-                # Handle tool calls
-                for tool_call in result["tool_calls"]:
-                    function_name = tool_call["function"]["name"]
-                    function_args = tool_call["function"]["arguments"]
-
-                    if function_name == "get_vm_info":
-                        # Call the get_current_weather function
-                        function_response = get_vm_info(function_args["vmname"], function_args.get("resource"))
-                        
-                        # Append the function response to the messages
-                        result["messages"].append({
-                            "tool_call_id": tool_call["id"],
-                            "role": "tool",
-                            "name": function_name,
-                            "content": function_response
-                        })
-
-                # Remove tool calls from the response
-                result.pop("tool_calls", None)
-
+            result = await complete_chat_request(request_body, request_headers)
             return jsonify(result)
 
     except Exception as ex:
@@ -975,13 +903,14 @@ async def conversation_internal(request_body):
         else:
             return jsonify({"error": str(ex)}), 500
 
+
 @bp.route("/conversation", methods=["POST"])
 async def conversation():
     if not request.is_json:
         return jsonify({"error": "request must be json"}), 415
     request_json = await request.get_json()
 
-    return await conversation_internal(request_json)
+    return await conversation_internal(request_json, request.headers)
 
 
 @bp.route("/frontend_settings", methods=["GET"])
@@ -1045,7 +974,7 @@ async def add_conversation():
         request_body = await request.get_json()
         history_metadata["conversation_id"] = conversation_id
         request_body["history_metadata"] = history_metadata
-        return await conversation_internal(request_body)
+        return await conversation_internal(request_body, request.headers)
 
     except Exception as e:
         logging.exception("Exception in /history/generate")
